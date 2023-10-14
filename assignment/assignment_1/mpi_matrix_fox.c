@@ -2,6 +2,7 @@
 #include "mpi.h"
 #include <math.h>
 #include <stdlib.h>
+#define MAT_SIZE 16
 
 typedef struct {
     int p; /* Total number of processes */
@@ -18,24 +19,25 @@ typedef struct {
 typedef struct {
     int n_bar;
     #define Order(A) ((A)->n_bar)
-    float entries[MAX];
+    double entries[MAX];
     #define Entry(A,i,j) (*(((A)->entries) + ((A)->n_bar)*(i) + (j)))
 } LOCAL_MATRIX_T;
 
 LOCAL_MATRIX_T* Local_matrix_allocate(int n_bar);
 void Free_local_matrix(LOCAL_MATRIX_T** local_A);
-void Read_matrix(char* prompt, LOCAL_MATRIX_T* local_A,
-GRID_INFO_T* grid, int n);
-void Print_matrix(char* title, LOCAL_MATRIX_T* local_A,
-GRID_INFO_T* grid, int n);
+void Read_matrix(char* prompt, LOCAL_MATRIX_T* local_A, GRID_INFO_T* grid, int n);
+void Print_matrix(char* title, LOCAL_MATRIX_T* local_A, GRID_INFO_T* grid, int n);
 void Set_to_zero(LOCAL_MATRIX_T* local_A);
-void Local_matrix_multiply(LOCAL_MATRIX_T* local_A,
-LOCAL_MATRIX_T* local_B, LOCAL_MATRIX_T* local_C);
+void Local_matrix_multiply(LOCAL_MATRIX_T* local_A, LOCAL_MATRIX_T* local_B, LOCAL_MATRIX_T* local_C);
 void Build_matrix_type(LOCAL_MATRIX_T* local_A);
 MPI_Datatype local_matrix_mpi_t;
 LOCAL_MATRIX_T* temp_mat;
 void Print_local_matrices(char* title, LOCAL_MATRIX_T* local_A,
 GRID_INFO_T* grid);
+void Setup_grid(GRID_INFO_T* grid);
+void Fox(int n, GRID_INFO_T* grid, LOCAL_MATRIX_T* local_A, LOCAL_MATRIX_T* local_B, LOCAL_MATRIX_T* local_C);
+
+void Random_matrix(char* prompt, LOCAL_MATRIX_T* local_A ,GRID_INFO_T* grid ,int n );
 
 int main(int argc, char* argv[]) {
     int p;
@@ -44,28 +46,23 @@ int main(int argc, char* argv[]) {
     LOCAL_MATRIX_T* local_A;
     LOCAL_MATRIX_T* local_B;
     LOCAL_MATRIX_T* local_C;
-    int n;
+    int n = MAT_SIZE;
     int n_bar;
-    void Setup_grid(GRID_INFO_T* grid);
-    void Fox(int n, GRID_INFO_T* grid, LOCAL_MATRIX_T* local_A,
-    LOCAL_MATRIX_T* local_B, LOCAL_MATRIX_T* local_C);
+
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
     Setup_grid(&grid);
-    if (my_rank == 0) {
-        printf("What's the order of the matrices?\n");
-        scanf("%d", &n);
-    }
+
     MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
     n_bar = n/grid.q;
     local_A = Local_matrix_allocate(n_bar);
     Order(local_A) = n_bar;
-    Read_matrix("Enter A", local_A, &grid, n);
+    Random_matrix("Generating random A matrix", local_A, &grid, n);
     Print_matrix("We read A =", local_A, &grid, n);
     local_B = Local_matrix_allocate(n_bar);
     Order(local_B) = n_bar;
-    Read_matrix("Enter B", local_B, &grid, n);
+    Random_matrix("Generating random B matrix", local_B, &grid, n);
     Print_matrix("We read B =", local_B, &grid, n);
     Build_matrix_type(local_A);
     temp_mat = Local_matrix_allocate(n_bar);
@@ -142,10 +139,10 @@ void Fox( int n /* in */,
 void Read_matrix(char* prompt /* in */,LOCAL_MATRIX_T* local_A /* out */,GRID_INFO_T* grid /* in */,int n /* in */) {
     int mat_row, mat_col, grid_row, grid_col, dest;
     int coords[2];
-    float* temp;
+    double* temp;
     MPI_Status status;
     if (grid->my_rank == 0) {
-        temp = (float*) malloc(Order(local_A)*sizeof(float));
+        temp = (double*) malloc(Order(local_A)*sizeof(double));
         printf("%s\n", prompt);
         fflush(stdout);
         for (mat_row = 0; mat_row < n; mat_row++) {
@@ -156,20 +153,52 @@ void Read_matrix(char* prompt /* in */,LOCAL_MATRIX_T* local_A /* out */,GRID_IN
                 MPI_Cart_rank(grid->comm, coords, &dest);
                 if (dest == 0) {
                     for (mat_col = 0; mat_col < Order(local_A); mat_col++)
-                    scanf("%f", (local_A->entries)+mat_row*Order(local_A)+mat_col);
+                    scanf("%lf", (local_A->entries)+mat_row*Order(local_A)+mat_col);
                 } else {
                     for(mat_col = 0; mat_col < Order(local_A); mat_col++)
-                        scanf("%f", temp + mat_col);
-                    MPI_Send(temp, Order(local_A), MPI_FLOAT, dest, 0, grid->comm);
+                        scanf("%lf", temp + mat_col);
+                    MPI_Send(temp, Order(local_A), MPI_DOUBLE, dest, 0, grid->comm);
                 }
             }
         }
         free(temp);
     } else {
         for (mat_row = 0; mat_row < Order(local_A); mat_row++)
-            MPI_Recv(&Entry(local_A, mat_row, 0), Order(local_A), MPI_FLOAT, 0, 0, grid->comm, &status);
+            MPI_Recv(&Entry(local_A, mat_row, 0), Order(local_A), MPI_DOUBLE, 0, 0, grid->comm, &status);
     }
 } /* Read_matrix */
+
+void Random_matrix(char* prompt /* in */,LOCAL_MATRIX_T* local_A /* out */,GRID_INFO_T* grid /* in */,int n /* in */) {
+    int mat_row, mat_col, grid_row, grid_col, dest;
+    int coords[2];
+    double* temp;
+    MPI_Status status;
+    if (grid->my_rank == 0) {
+        temp = (double*) malloc(Order(local_A)*sizeof(double));
+        printf("%s\n", prompt);
+        fflush(stdout);
+        for (mat_row = 0; mat_row < n; mat_row++) {
+            grid_row = mat_row/Order(local_A);
+            coords[0] = grid_row;
+            for (grid_col = 0; grid_col < grid->q; grid_col++) {
+                coords[1] = grid_col;
+                MPI_Cart_rank(grid->comm, coords, &dest);
+                if (dest == 0) {
+                    for (mat_col = 0; mat_col < Order(local_A); mat_col++)
+                    Entry(local_A, mat_row, mat_col) = (double)rand()/(double)(RAND_MAX/10.0);
+                } else {
+                    for(mat_col = 0; mat_col < Order(local_A); mat_col++)
+                    Entry(local_A, mat_row, mat_col) = (double)rand()/(double)(RAND_MAX/10.0);
+                    MPI_Send(temp, Order(local_A), MPI_DOUBLE, dest, 0, grid->comm);
+                }
+            }
+        }
+        free(temp);
+    } else {
+        for (mat_row = 0; mat_row < Order(local_A); mat_row++)
+            MPI_Recv(&Entry(local_A, mat_row, 0), Order(local_A), MPI_DOUBLE, 0, 0, grid->comm, &status);
+    }
+}
 
 void Print_matrix(
     char* title /* in */,
@@ -178,10 +207,10 @@ void Print_matrix(
     int n /* in */) {
         int mat_row, mat_col, grid_row, grid_col, source;
         int coords[2];
-        float* temp;
+        double* temp;
         MPI_Status status;
     if (grid->my_rank == 0) {
-        temp = (float*) malloc(Order(local_A)*sizeof(float));
+        temp = (double*) malloc(Order(local_A)*sizeof(double));
         printf("%s\n", title);
         for (mat_row = 0; mat_row < n; mat_row++) {
             grid_row = mat_row/Order(local_A);
@@ -193,8 +222,7 @@ void Print_matrix(
                     for(mat_col = 0; mat_col < Order(local_A); mat_col++)
                         printf("%4.1f ", Entry(local_A, mat_row, mat_col));
                 } else {
-                    MPI_Recv(temp, Order(local_A), MPI_FLOAT, source, 0,
-                    grid->comm, &status);
+                    MPI_Recv(temp, Order(local_A), MPI_DOUBLE, source, 0, grid->comm, &status);
                     for(mat_col = 0; mat_col < Order(local_A); mat_col++)
                         printf("%4.1f ", temp[mat_col]);
                 }
@@ -204,8 +232,7 @@ void Print_matrix(
         free(temp);
     } else {
         for (mat_row = 0; mat_row < Order(local_A); mat_row++)
-        MPI_Send(&Entry(local_A, mat_row, 0), Order(local_A),
-        MPI_FLOAT, 0, 0, grid->comm);
+        MPI_Send(&Entry(local_A, mat_row, 0), Order(local_A), MPI_DOUBLE, 0, 0, grid->comm);
     }
 } /* Print_matrix */
 
@@ -265,8 +292,7 @@ LOCAL_MATRIX_T* local_A /* in */) {
     MPI_Aint start_address;
     MPI_Aint address;
     MPI_Type_contiguous(
-    Order(local_A)*Order(local_A),
-    MPI_FLOAT, &temp_mpi_t );
+    Order(local_A)*Order(local_A), MPI_DOUBLE, &temp_mpi_t );
     block_lengths[0] = block_lengths[1] = 1;
     typelist[0] = MPI_INT;
     typelist[1] = temp_mpi_t;
